@@ -7,6 +7,7 @@
 #include <string.h>
 #include <inttypes.h>
 
+#include "btstack.h"
 #include "btstack_hci.h"
 #include "btstack_avdtp_source.h"
 #include "../pico_w_led.h"
@@ -22,6 +23,10 @@ static bd_addr_t device_addr_list[2];
 
 static bool scan_active = true;
 
+static bool device_addr_is_set(void){
+    return !btstack_is_null_bd_addr(device_addr);
+}
+
 
 const char * get_device_addr_string(){
     return device_addr_string;
@@ -36,7 +41,7 @@ bd_addr_t * get_device_addr_from_list(uint8_t i){
 }
 
 void gap_start_scanning(void){
-    printf("Start scanning...\n");
+    printf("Start scanning (pairing mode)...\n");
     gap_inquiry_start(A2DP_SOURCE_DEMO_INQUIRY_DURATION_1280MS);
     scan_active = true;
     set_led_mode_off();
@@ -54,14 +59,25 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
     bd_addr_t address;
     uint32_t cod;
 
-    // Service Class: Rendering | Audio, Major Device Class: Audio
-    const uint32_t bluetooth_speaker_cod = 0x200000 | 0x040000 | 0x000400;
+    // Major Device Class = Audio/Video (bits 12..8 = 0b00100).
+    // Also accept Audio service class bit alone (some TWS omit major bits in inquiry).
+    const uint32_t audio_major_cod_mask = 0x001F00;
+    const uint32_t audio_major_cod      = 0x000400;
+    const uint32_t audio_service_bit    = 0x200000;
 
     switch (hci_event_packet_get_type(packet)){
         case  BTSTACK_EVENT_STATE:
             if (btstack_event_state_get_state(packet) != HCI_STATE_WORKING) return;
-            if ( strcmp(device_addr_string , "00:00:00:00:00:00") == 0 ){
+            // Match original USBPods behavior:
+            // - no known device  → enter pairing scan immediately
+            // - known device     → stay in standby (double/triple blink); short-press reconnects
+            // Do NOT auto-reconnect on boot: failed reconnect left the LED stuck on double-blink.
+            if (!device_addr_is_set()){
+                printf("No saved device MAC, starting pairing scan\n");
                 gap_start_scanning();
+            } else {
+                printf("Standby for saved device %s (short-press reconnect, long-press re-pair)\n",
+                       bd_addr_to_str(device_addr));
             }
             break;
 
@@ -70,7 +86,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_pin_code_request_get_bd_addr(packet, address);
             gap_pin_code_response(address, "0000");
             break;
-        case GAP_EVENT_INQUIRY_RESULT:
+
+        case HCI_EVENT_USER_CONFIRMATION_REQUEST:
+            // Numeric comparison SSP — auto-accept
+            printf("SSP user confirmation - auto accept\n");
+            hci_event_user_confirmation_request_get_bd_addr(packet, address);
+            gap_ssp_confirmation_response(address);
+            break;
+
+        case GAP_EVENT_INQUIRY_RESULT: {
             gap_event_inquiry_result_get_bd_addr(packet, address);
             // print info
             printf("Device found: %s ",  bd_addr_to_str(address));
@@ -87,9 +111,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 printf(", name '%s'", name_buffer);
             }
             printf("\n");
-            if ((cod & bluetooth_speaker_cod) == bluetooth_speaker_cod){
+            bool cod_is_audio = ((cod & audio_major_cod_mask) == audio_major_cod)
+                             || ((cod & audio_service_bit) != 0);
+            if (cod_is_audio){
                 memcpy(device_addr, address, 6);
-                printf("Bluetooth speaker detected, trying to connect to %s...\n", bd_addr_to_str(device_addr));
+                strncpy(device_addr_string, bd_addr_to_str(device_addr), sizeof(device_addr_string) - 1);
+                device_addr_string[sizeof(device_addr_string) - 1] = 0;
+                printf("Bluetooth audio device detected, trying to connect to %s...\n", bd_addr_to_str(device_addr));
                 scan_active = false;
                 gap_inquiry_stop();
 
@@ -105,6 +133,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 avdtp_source_establish_stream();
             }
             break;
+        }
         case GAP_EVENT_INQUIRY_COMPLETE:
             if (scan_active){
                 printf("No Bluetooth speakers found, scanning again...\n");
@@ -124,12 +153,15 @@ void get_link_keys(void){
     btstack_link_key_iterator_t it;
     const char * addr_str;
 
+    memset(device_addr, 0, sizeof(device_addr));
+    strncpy(device_addr_string, "00:00:00:00:00:00", sizeof(device_addr_string));
+
     int ok = gap_link_key_iterator_init(&it);
     if (!ok) {
         printf("Link key iterator not implemented\n");
         return;
     }
-    printf("Stored First link key: \n");
+    printf("Stored link keys:\n");
 
     if (gap_link_key_iterator_get_next(&it, addr, link_key, &type)){
         addr_str = bd_addr_to_str(addr);
@@ -139,14 +171,12 @@ void get_link_keys(void){
         sscanf_bd_addr(device_addr_string, device_addr_list[0]);
     }
 
-    //sscanf_bd_addr(device_addr_string, device_addr);
-
     if (gap_link_key_iterator_get_next(&it, addr, link_key, &type)){
         addr_str = bd_addr_to_str(addr);
         printf("%s - type %u, key: ", addr_str, (int) type);
         printf_hexdump(link_key, 16);
-        strncpy(device_addr_string, addr_str, sizeof(device_addr_string) - 1);
-        sscanf_bd_addr(device_addr_string, device_addr_list[1]);
+        // keep first key string for diagnostics; slot MAC is authoritative for reconnect
+        sscanf_bd_addr(addr_str, device_addr_list[1]);
     }
 
     printf(".\n");
@@ -154,25 +184,32 @@ void get_link_keys(void){
 
     uint8_t currect_slot = read_uint8_last_flash();
 
-    printf("currect slot iss %d\n", currect_slot);
+    printf("current slot is %d\n", currect_slot);
 
     if(currect_slot == 0x1){
         set_led_mode_double_blink();
         bd_addr_t  addr_flash_slot1;
         read_slot1_mac(addr_flash_slot1);
         printf("cur slot1 flash addr is %s\n ", bd_addr_to_str(addr_flash_slot1));
-        memcpy(device_addr, addr_flash_slot1, sizeof(bd_addr_t)); 
+        memcpy(device_addr, addr_flash_slot1, sizeof(bd_addr_t));
     }
 
     if(currect_slot == 0x2){
-        //printf("currect slot is 2\n");
         set_led_mode_triple_blink();
         bd_addr_t  addr_flash_slot2;
         read_slot2_mac(addr_flash_slot2);
         printf("cur slot2 flash addr is %s\n ", bd_addr_to_str(addr_flash_slot2));
-        memcpy(device_addr, addr_flash_slot2, sizeof(bd_addr_t)); 
+        memcpy(device_addr, addr_flash_slot2, sizeof(bd_addr_t));
     }
-    
+
+    if (device_addr_is_set()){
+        strncpy(device_addr_string, bd_addr_to_str(device_addr), sizeof(device_addr_string) - 1);
+        device_addr_string[sizeof(device_addr_string) - 1] = 0;
+    } else {
+        // Flash MAC empty: do not treat leftover link keys as a valid saved device
+        strncpy(device_addr_string, "00:00:00:00:00:00", sizeof(device_addr_string));
+        printf("Flash MAC empty — will pair on boot / long-press\n");
+    }
 }
 
 
@@ -213,6 +250,8 @@ void bt_hci_init(void){
     gap_set_local_name("Pico USB Audio");
     gap_discoverable_control(0);
     gap_set_class_of_device(0x200408);
+    // Persist link keys so re-pair is not required after reboot
+    gap_set_bondable_mode(1);
 
     /* Register for HCI events */
     hci_event_callback_registration.callback = &hci_packet_handler;

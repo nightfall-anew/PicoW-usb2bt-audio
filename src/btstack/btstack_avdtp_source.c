@@ -48,6 +48,7 @@
 #include "btstack_avdtp_source.h"
 #include "pico/multicore.h"
 #include "pico/util/queue.h"
+#include "../tinyusb/usb_hid_media.h"
 
 #include "btstack_hci.h"
 
@@ -275,7 +276,7 @@ static uint8_t media_aaceld_codec_capabilities[] = {
 
 // configurations for local stream endpoints
 static uint8_t local_stream_endpoint_sbc_media_codec_configuration[4];
-static uint8_t local_stream_endpoint_ldac_media_codec_configuration[9];
+static uint8_t local_stream_endpoint_ldac_media_codec_configuration[8];
 static uint8_t local_stream_endpoint_aaceld_media_codec_configuration[14];
 static avdtp_media_codec_configuration_ldac_t ldac_configuration;
 
@@ -1206,6 +1207,9 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             status = avdtp_subevent_signaling_connection_established_get_status(packet);
             if (status != 0){
                 printf("AVDTP source signaling connection failed: status %d\n", status);
+                a2dp_is_connected_flag = false;
+                // Stay usable: fall back to pairing scan rather than silent idle
+                gap_start_scanning();
                 break;
             }
             media_tracker.avdtp_cid = avdtp_subevent_signaling_connection_established_get_avdtp_cid(packet);
@@ -2353,31 +2357,38 @@ static int setup_aaceld_configuration(){
 void avdtp_disconnect_and_scan(){
     a2dp_demo_timer_stop(&media_tracker);
     a2dp_source_disconnect(media_tracker.avdtp_cid);
-    avrcp_disconnect(media_tracker.avdtp_cid);
+    avrcp_disconnect(media_tracker.avrcp_cid);
     audio_slot_queue_init(); // reset all slots on disconnect
-    gap_drop_link_key_for_bd_addr((uint8_t *) get_device_addr());
-    uint8_t currect_slot = read_uint8_last_flash();
 
-    printf("currect slot iss %d\n", currect_slot);
+    // Clear bond + saved MAC so a full re-pair is possible
+    gap_drop_link_key_for_bd_addr((uint8_t *) get_device_addr());
+    gap_delete_all_link_keys();
+
+    uint8_t currect_slot = read_uint8_last_flash();
+    printf("long-press re-pair, current slot is %d\n", currect_slot);
 
     uint8_t new_addr[6] = {0x0};
-
     if(currect_slot == 0x1){
         write_slot1_mac(new_addr);
     }
-
     if(currect_slot == 0x2){
         write_slot2_mac(new_addr);
     }
-    //gap_delete_all_link_keys();
+    memset(get_device_addr(), 0, 6);
+
     gap_start_scanning();
 }
 
 void a2dp_source_reconnect(){
-    //sleep_ms(500);
-    avdtp_source_connect((uint8_t *) get_device_addr(), &media_tracker.avdtp_cid);
+    bd_addr_t *addr = get_device_addr();
+    if (btstack_is_null_bd_addr(*addr)) {
+        printf("Reconnect requested but no saved MAC — start pairing scan\n");
+        gap_start_scanning();
+        return;
+    }
+    printf("Reconnect to %s\n", bd_addr_to_str(*addr));
+    avdtp_source_connect((uint8_t *) addr, &media_tracker.avdtp_cid);
     sleep_ms(200);
-    //printf(" Create A2DP Source connection to addr %s, cid 0x%02x.\n", bd_addr_to_str(device_addr), media_tracker.a2dp_cid);
 }
 
 
@@ -2563,21 +2574,37 @@ static void avrcp_target_packet_handler(uint8_t packet_type, uint16_t channel, u
             if (!button_pressed){
                 break;
             }
+            // Forward headset media keys to the USB host as HID Consumer Control.
+            // PLAY and PAUSE both map to Play/Pause (0xCD) — the standard toggle key.
             switch (operation_id) {
                 case AVRCP_OPERATION_ID_PLAY:
-                    is_muted = false;
-                    _bt_sink_volume_changed = true;
-                    avrcp_controller_set_absolute_volume(media_tracker.avrcp_cid, media_tracker.volume);
-                    //a2dp_demo_timer_start(&media_tracker);
-                    break;
                 case AVRCP_OPERATION_ID_PAUSE:
-                    //a2dp_demo_timer_pause(&media_tracker);
-                    _bt_sink_volume_changed = true;
-                    is_muted = true;
-                    avrcp_controller_set_absolute_volume(media_tracker.avrcp_cid, 0);
+                    printf("AVRCP -> USB HID: Play/Pause\n");
+                    usb_hid_media_send(USB_HID_USAGE_PLAY_PAUSE);
                     break;
                 case AVRCP_OPERATION_ID_STOP:
-                    status = avdtp_source_stop_stream(media_tracker.avdtp_cid, media_tracker.local_seid);
+                    printf("AVRCP -> USB HID: Stop\n");
+                    usb_hid_media_send(USB_HID_USAGE_STOP);
+                    break;
+                case AVRCP_OPERATION_ID_FORWARD:
+                    printf("AVRCP -> USB HID: Next track\n");
+                    usb_hid_media_send(USB_HID_USAGE_SCAN_NEXT);
+                    break;
+                case AVRCP_OPERATION_ID_BACKWARD:
+                    printf("AVRCP -> USB HID: Previous track\n");
+                    usb_hid_media_send(USB_HID_USAGE_SCAN_PREVIOUS);
+                    break;
+                case AVRCP_OPERATION_ID_MUTE:
+                    printf("AVRCP -> USB HID: Mute\n");
+                    usb_hid_media_send(USB_HID_USAGE_MUTE);
+                    break;
+                case AVRCP_OPERATION_ID_VOLUME_UP:
+                    printf("AVRCP -> USB HID: Volume Up\n");
+                    usb_hid_media_send(USB_HID_USAGE_VOLUME_INCREMENT);
+                    break;
+                case AVRCP_OPERATION_ID_VOLUME_DOWN:
+                    printf("AVRCP -> USB HID: Volume Down\n");
+                    usb_hid_media_send(USB_HID_USAGE_VOLUME_DECREMENT);
                     break;
                 default:
                     break;
@@ -2649,11 +2676,10 @@ int btstack_main(int argc, const char * argv[]){
 
     // Initialize SDP
     sdp_init();
+    // Distinct SDP record handles (must not collide or later services overwrite earlier ones)
     memset(sdp_avdtp_source_service_buffer, 0, sizeof(sdp_avdtp_source_service_buffer));
-    a2dp_source_create_sdp_record(sdp_avdtp_source_service_buffer, 0x10002, AVDTP_SOURCE_FEATURE_MASK_PLAYER, NULL, NULL);
+    a2dp_source_create_sdp_record(sdp_avdtp_source_service_buffer, 0x10001, AVDTP_SOURCE_FEATURE_MASK_PLAYER, NULL, NULL);
     sdp_register_service(sdp_avdtp_source_service_buffer);
-
-
 
     // Create AVRCP Target service record and register it with SDP. We receive Category 1 commands from the headphone, e.g. play/pause
     memset(sdp_avrcp_target_service_buffer, 0, sizeof(sdp_avrcp_target_service_buffer));

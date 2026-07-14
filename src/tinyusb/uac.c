@@ -29,9 +29,11 @@
  #include "bsp/board_api.h"
  #include "tusb.h"
  #include "usb_descriptors.h"
+ #include "usb_hid_media.h"
 
  #include "../btstack/btstack_avdtp_source.h"
  #include "pico/flash.h"
+ #include "hardware/structs/usb.h"
 
 
  
@@ -130,13 +132,16 @@
 
  void tinyusb_task(void){
     tud_task(); // TinyUSB device task
-    audio_task(); 
+    audio_task();
+    usb_hid_media_task();
  }
  
 
 void tinyusb_control_task(void){
   //tud_task(); // TinyUSB device task
   audio_control_task();
+  // Also drain HID press/release from the main loop (safer than timer-only)
+  usb_hid_media_task();
 }
 
  //--------------------------------------------------------------------+
@@ -363,8 +368,15 @@ void tinyusb_control_task(void){
    uint8_t const itf = tu_u16_low(tu_le16toh(p_request->wIndex));
    uint8_t const alt = tu_u16_low(tu_le16toh(p_request->wValue));
  
-   if (ITF_NUM_AUDIO_STREAMING_SPK == itf && alt == 0)
-       blink_interval_ms = BLINK_MOUNTED;
+   if (ITF_NUM_AUDIO_STREAMING_SPK == itf && alt == 0) {
+     blink_interval_ms = BLINK_MOUNTED;
+     // On RP2040/RP2350 with TUP_DCD_EDPT_ISO_ALLOC, ISO endpoints are never truly
+     // closed — the hardware buffer control register keeps USB_BUF_CTRL_AVAIL set.
+     // Clearing it here prevents a "ep 01 was already available" panic when the host
+     // reopens the streaming interface (e.g. after pause or gap between tracks).
+     // EP index 1 = EPNUM_AUDIO_OUT (0x01) as defined in usb_descriptors.c for RP2040.
+     usb_dpram->ep_buf_ctrl[1].out = 0;
+   }
  
    return true;
  }

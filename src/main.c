@@ -67,6 +67,7 @@ static bool __no_inline_not_in_flash_func(get_bootsel_button)() {
 void on_single_press(void){
     printf("key pressed short (single tap)!\n");
     if (! get_a2dp_connected_flag()) {
+        // Reconnect last saved device; if none, a2dp_source_reconnect starts scan
         a2dp_source_reconnect();
     } else {
         increase_vol_by_key();

@@ -73,9 +73,24 @@ uint8_t const * tud_descriptor_device_cb(void)
 }
 
 //--------------------------------------------------------------------+
+// HID Report Descriptor (Consumer Control media keys)
+//--------------------------------------------------------------------+
+uint8_t const desc_hid_report[] =
+{
+  TUD_HID_REPORT_DESC_CONSUMER()
+};
+
+// Invoked when received GET HID REPORT DESCRIPTOR
+uint8_t const * tud_hid_descriptor_report_cb(uint8_t instance)
+{
+  (void) instance;
+  return desc_hid_report;
+}
+
+//--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
-#define CONFIG_TOTAL_LEN    	(TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN)
+#define CONFIG_TOTAL_LEN    	(TUD_CONFIG_DESC_LEN + CFG_TUD_AUDIO * TUD_AUDIO_HEADSET_STEREO_DESC_LEN + TUD_HID_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
   // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
@@ -83,6 +98,7 @@ uint8_t const * tud_descriptor_device_cb(void)
   #define EPNUM_AUDIO_IN    0x03
   #define EPNUM_AUDIO_OUT   0x03
   #define EPNUM_AUDIO_INT   0x01
+  #define EPNUM_HID         0x04
 
 #elif CFG_TUSB_MCU == OPT_MCU_CXD56
   // CXD56 USB driver has fixed endpoint type (bulk/interrupt/iso) and direction (IN/OUT) by its number
@@ -90,12 +106,14 @@ uint8_t const * tud_descriptor_device_cb(void)
   // #define EPNUM_AUDIO_IN    0x01
   // #define EPNUM_AUDIO_OUT   0x02
   // #define EPNUM_AUDIO_INT   0x03
+  #define EPNUM_HID         0x03
 
 #elif CFG_TUSB_MCU == OPT_MCU_NRF5X
   // ISO endpoints for NRF5x are fixed to 0x08 (0x88)
   #define EPNUM_AUDIO_IN    0x08
   #define EPNUM_AUDIO_OUT   0x08
   #define EPNUM_AUDIO_INT   0x01
+  #define EPNUM_HID         0x02
 
 #elif defined(TUD_ENDPOINT_ONE_DIRECTION_ONLY)
   // MCUs that don't support a same endpoint number with different direction IN and OUT defined in tusb_mcu.h
@@ -103,11 +121,13 @@ uint8_t const * tud_descriptor_device_cb(void)
   #define EPNUM_AUDIO_IN    0x01
   #define EPNUM_AUDIO_OUT   0x02
   #define EPNUM_AUDIO_INT   0x03
+  #define EPNUM_HID         0x04
 
 #else
   #define EPNUM_AUDIO_IN    0x01
   #define EPNUM_AUDIO_OUT   0x01
   #define EPNUM_AUDIO_INT   0x02
+  #define EPNUM_HID         0x03
 #endif
 
 uint8_t const desc_configuration[] =
@@ -116,8 +136,11 @@ uint8_t const desc_configuration[] =
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0x00, 100),
 
     // Interface number, string index, EP Out & EP In address, EP size
-    TUD_AUDIO_HEADSET_STEREO_DESCRIPTOR(2, EPNUM_AUDIO_OUT, 0x00, EPNUM_AUDIO_INT | 0x80)
+    TUD_AUDIO_HEADSET_STEREO_DESCRIPTOR(2, EPNUM_AUDIO_OUT, 0x00, EPNUM_AUDIO_INT | 0x80),
 
+    // HID Consumer Control: interface number, string index, protocol, report desc len, EP In, size, interval (ms)
+    TUD_HID_DESCRIPTOR(ITF_NUM_HID, 6, HID_ITF_PROTOCOL_NONE, sizeof(desc_hid_report),
+                       EPNUM_HID | 0x80, CFG_TUD_HID_EP_BUFSIZE, 5)
   };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
@@ -146,10 +169,11 @@ char const *string_desc_arr[] =
 {
   (const char[]) { 0x09, 0x04 },  // 0: is supported language is English (0x0409)
   "TinyUSB",                      // 1: Manufacturer
-  "TinyUSB BT",              // 2: Product
+  "TinyUSB BT",                   // 2: Product
   NULL,                           // 3: Serials will use unique ID if possible
-  "TinyUSB BT",             // 4: Audio Interface
-  "TinyUSB BT",                 // 5: Audio Interface
+  "TinyUSB BT",                   // 4: Audio Interface
+  "TinyUSB BT",                   // 5: Audio Interface
+  "TinyUSB BT Media",             // 6: HID Consumer Control
 };
 
 
