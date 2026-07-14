@@ -23,7 +23,15 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
 # ====================================================================================
+# Board selection (single tree supports both):
+#   - Official Pico 2 W:          PICO_BOARD=pico2_w  (default)
+#   - Waveshare RP2350B-Plus-W:   PICO_BOARD=waveshare_rp2350b_plus_w
+# Example:
+#   cmake -S . -B build-waveshare -DPICO_BOARD=waveshare_rp2350b_plus_w
+# VS Code Pico extension: use "Switch Board" / CMake: PICO_BOARD.
+# Custom board headers live in boards/ (required for waveshare_rp2350b_plus_w).
 set(PICO_BOARD pico2_w CACHE STRING "Board type")
+list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boards)
 set(FAMILY rp2040)
 set(BOARD pico_sdk)
 
