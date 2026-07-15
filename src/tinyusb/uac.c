@@ -131,17 +131,16 @@
 
 
  void tinyusb_task(void){
-    tud_task(); // TinyUSB device task
+    // Keep all TinyUSB traffic on the USB timer path (same context as tud_task).
+    tud_task();
     audio_task();
-    usb_hid_media_task();
+    audio_control_task();   // volume/mute interrupt reports
+    usb_hid_media_task();   // AVRCP → HID consumer keys
  }
  
 
 void tinyusb_control_task(void){
-  //tud_task(); // TinyUSB device task
-  audio_control_task();
-  // Also drain HID press/release from the main loop (safer than timer-only)
-  usb_hid_media_task();
+  // Main loop still calls this for watchdog-friendly pacing; work is in tinyusb_task.
 }
 
  //--------------------------------------------------------------------+

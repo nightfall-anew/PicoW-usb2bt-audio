@@ -213,7 +213,10 @@ void get_link_keys(void){
 }
 
 
+// Separate registration objects — BTstack stores the pointer; reusing one
+// struct for two handlers overwrites the first callback in the list.
 static btstack_packet_callback_registration_t hci_event_callback_registration;
+static btstack_packet_callback_registration_t hci_event_callback_registration_state;
 
 
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
@@ -236,8 +239,8 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 void bt_hci_init(void){
 
     // inform about BTstack state
-    hci_event_callback_registration.callback = &packet_handler;
-    hci_add_event_handler(&hci_event_callback_registration);
+    hci_event_callback_registration_state.callback = &packet_handler;
+    hci_add_event_handler(&hci_event_callback_registration_state);
 
     // Request role change on reconnecting headset to always use them in slave mode
     hci_set_master_slave_policy(0);
@@ -253,7 +256,7 @@ void bt_hci_init(void){
     // Persist link keys so re-pair is not required after reboot
     gap_set_bondable_mode(1);
 
-    /* Register for HCI events */
+    /* Register for HCI events (inquiry / pairing / reconnect policy) */
     hci_event_callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
 

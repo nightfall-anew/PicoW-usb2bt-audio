@@ -1889,9 +1889,19 @@ static void show_usage(void){
 
 
 void set_bt_volume(int16_t val){
-    media_tracker.volume = (val*2 + 100) * 127 / 100;
-    avrcp_controller_set_absolute_volume(media_tracker.avrcp_cid, media_tracker.volume);
-    //printf("(via set usb volume) %d%% (%d)\n",  media_tracker.volume * 100 / 127,  media_tracker.volume);
+    // val is USB volume in dB (typically 0 .. -50)
+    int vol = (val * 2 + 100) * 127 / 100;
+    if (vol < 0) vol = 0;
+    if (vol > 127) vol = 127;
+    media_tracker.volume = (uint8_t) vol;
+
+    if (media_tracker.avrcp_cid == 0) {
+        printf("set_bt_volume: AVRCP not connected, cached vol=%u\n", media_tracker.volume);
+        return;
+    }
+    uint8_t status = avrcp_controller_set_absolute_volume(media_tracker.avrcp_cid, media_tracker.volume);
+    printf("set_bt_volume: %u/127 (USB %d dB) status=0x%02x\n",
+           media_tracker.volume, (int)val, status);
 }
 
 static void stdin_process(char cmd){
@@ -2574,8 +2584,8 @@ static void avrcp_target_packet_handler(uint8_t packet_type, uint16_t channel, u
             if (!button_pressed){
                 break;
             }
-            // Forward headset media keys to the USB host as HID Consumer Control.
-            // PLAY and PAUSE both map to Play/Pause (0xCD) — the standard toggle key.
+            // Media transport → USB HID (host player).
+            // Volume pass-through → Absolute Volume (headset amp) + notify USB host.
             switch (operation_id) {
                 case AVRCP_OPERATION_ID_PLAY:
                 case AVRCP_OPERATION_ID_PAUSE:
@@ -2599,12 +2609,29 @@ static void avrcp_target_packet_handler(uint8_t packet_type, uint16_t channel, u
                     usb_hid_media_send(USB_HID_USAGE_MUTE);
                     break;
                 case AVRCP_OPERATION_ID_VOLUME_UP:
-                    printf("AVRCP -> USB HID: Volume Up\n");
-                    usb_hid_media_send(USB_HID_USAGE_VOLUME_INCREMENT);
+                    // Prefer absolute volume on the sink (same as BOOTSEL vol+)
+                    if (media_tracker.volume > 117) {
+                        media_tracker.volume = 127;
+                    } else {
+                        media_tracker.volume += 10;
+                    }
+                    if (media_tracker.avrcp_cid) {
+                        avrcp_controller_set_absolute_volume(media_tracker.avrcp_cid, media_tracker.volume);
+                    }
+                    _bt_sink_volume_changed = true;
+                    printf("AVRCP volume up -> %u/127\n", media_tracker.volume);
                     break;
                 case AVRCP_OPERATION_ID_VOLUME_DOWN:
-                    printf("AVRCP -> USB HID: Volume Down\n");
-                    usb_hid_media_send(USB_HID_USAGE_VOLUME_DECREMENT);
+                    if (media_tracker.volume < 10) {
+                        media_tracker.volume = 0;
+                    } else {
+                        media_tracker.volume -= 10;
+                    }
+                    if (media_tracker.avrcp_cid) {
+                        avrcp_controller_set_absolute_volume(media_tracker.avrcp_cid, media_tracker.volume);
+                    }
+                    _bt_sink_volume_changed = true;
+                    printf("AVRCP volume down -> %u/127\n", media_tracker.volume);
                     break;
                 default:
                     break;

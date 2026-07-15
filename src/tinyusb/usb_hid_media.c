@@ -12,7 +12,8 @@
 // 0 = all keys released.
 
 static volatile uint16_t s_pending_usage = 0;
-static bool s_need_release = false;
+static volatile bool s_need_release = false;
+static volatile bool s_release_armed = false;
 static absolute_time_t s_release_at;
 
 void usb_hid_media_send(uint16_t usage) {
@@ -39,6 +40,7 @@ void usb_hid_media_task(void) {
         uint16_t empty = 0;
         if (tud_hid_report(0, &empty, sizeof(empty))) {
             s_need_release = false;
+            s_release_armed = false;
         }
         return;
     }
@@ -54,7 +56,9 @@ void usb_hid_media_task(void) {
 
     if (tud_hid_report(0, &usage, sizeof(usage))) {
         s_need_release = true;
-        s_release_at = make_timeout_time_ms(15);
+        s_release_armed = true;
+        s_release_at = make_timeout_time_ms(20);
+        printf("HID media press usage=0x%04x\n", usage);
     } else {
         // Endpoint busy — put it back for the next pass.
         irq = save_and_disable_interrupts();
