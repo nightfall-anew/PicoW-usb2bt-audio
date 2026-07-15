@@ -1629,8 +1629,9 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 }
 
                 // init ldac encoder
+                // EQMID: HQ≈909kbps @44.1k (990@48k), SQ≈606, MQ≈303
                 int mtu = 1536; // minimal required mtu
-                if (ldacBT_init_handle_encode(handleLDAC, mtu, LDACBT_EQMID_SQ, ldac_configuration.channel_mode,
+                if (ldacBT_init_handle_encode(handleLDAC, mtu, LDACBT_EQMID_HQ, ldac_configuration.channel_mode,
                             LDACBT_SMPL_FMT_S16, ldac_configuration.sampling_frequency) == -1) {
                     printf("Couldn't initialize LDAC encoder: %d\n", ldacBT_get_error_code(handleLDAC));
                     break;
@@ -1640,7 +1641,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 // MQ -> audio_timer_interval <= 10
                 audio_timer_interval = 1;
                 current_sample_rate = ldac_configuration.sampling_frequency;
-                printf("current LDAC sampling rate is %d \n", current_sample_rate);
+                printf("LDAC HQ (~909 kbps) sampling rate %d Hz\n", current_sample_rate);
 
                 audio_slot_queue_configure_with_count(LDACBT_ENC_LSU, AUDIO_SLOT_COUNT_LDAC);
 
