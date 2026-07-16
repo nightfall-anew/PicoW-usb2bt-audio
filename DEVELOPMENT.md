@@ -119,18 +119,18 @@ CMake 注册：`list(APPEND PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_LIST_DIR}/boa
 
 历史上独立分支 `fix/cyw43-pins-rp2350b` 的板级内容已合入 `main`；日常只维护 `main` 即可。
 
-### 2.6 LDAC 码率（当前工作区）
+### 2.6 LDAC 码率（当前）
 
-| 等级 | 约码率 | 宏 |
-|------|--------|-----|
-| **HQ（当前）** | ~909 / 990 kbps | `LDACBT_EQMID_HQ` |
-| SQ（原版默认） | ~606 / 660 | `LDACBT_EQMID_SQ` |
-| MQ | ~303 / 330 | `LDACBT_EQMID_MQ` |
+| 等级 | 约码率 | 宏 | 建议 `audio_timer_interval` |
+|------|--------|-----|------------------------------|
+| HQ | ~909 / 990 kbps | `LDACBT_EQMID_HQ` | `1` |
+| **SQ（当前）** | ~606 / 660 | `LDACBT_EQMID_SQ` | `≤ 5`（现用 `5`） |
+| MQ | ~303 / 330 | `LDACBT_EQMID_MQ` | `≤ 10` |
 
-位置：`src/btstack/btstack_avdtp_source.c` 内 `ldacBT_init_handle_encode(..., LDACBT_EQMID_HQ, ...)`。  
-改 SQ/MQ 时同步关注注释里的 `audio_timer_interval` 建议（HQ 已用 `1`）。
+位置：`src/btstack/btstack_avdtp_source.c` 内 `ldacBT_init_handle_encode(..., LDACBT_EQMID_SQ, ...)`。  
+`audio_timer_interval` 是 A2DP 推流定时器周期（ms），码率越高应越勤；改档时两处一起改。
 
-> 若该改动尚未 commit，提交前请 `git status` 确认。
+> SQ 在音质与链路稳定性之间更均衡；若近距离仍要极致音质可改回 HQ（`interval=1`）。
 
 ---
 
@@ -205,7 +205,7 @@ VS Code Pico 扩展：用 **Switch Board** / 设置 `PICO_BOARD`；Waveshare 需
   - `AVRCP: Channel ... successfully opened`
   - `set_bt_volume:` / `AVRCP volume up`
   - `AVRCP -> USB HID:` / `HID media press`
-  - `LDAC HQ (~909 kbps)`
+  - `LDAC SQ (~606 kbps)`
 - 主机应枚举：**声卡 + HID 媒体设备**。媒体键需要系统有活动媒体会话（播放器在播或支持媒体键）。
 - 配对一直**双闪**：多半是待机不是扫描 → **长按**进快闪；确认没烧错板固件。
 
@@ -220,7 +220,7 @@ VS Code Pico 扩展：用 **Switch Board** / 设置 `PICO_BOARD`；Waveshare 需
 | HID 队列 | 连按只保留最后一键 |
 | `is_muted` | 旧静音伪装路径基本闲置 |
 | 双击切槽 | 连接后不可用，需断 USB |
-| LDAC HQ | 链路/耳机不支持时可能卡顿或降级失败，可改回 SQ |
+| LDAC SQ（当前） | 比 HQ 更稳；若仍卡可试 MQ；要极致音质改 HQ（`interval=1`） |
 | CDC 调试 | 旧实验在 `usb-cdc-debug-fixes` 分支，未合 main |
 | 上游同步 | 定期可 diff `wasdwasd0105/USBPods-Pico2W:main`，cherry-pick 有用提交 |
 
@@ -237,7 +237,7 @@ VS Code Pico 扩展：用 **Switch Board** / 设置 `PICO_BOARD`；Waveshare 需
 
 | 分支 | 状态 |
 |------|------|
-| **`main`** | 唯一日常分支：HID + 配对修复 + 双板 +（工作区）LDAC HQ |
+| **`main`** | 唯一日常分支：HID + 配对修复 + 双板 + LDAC SQ |
 | `feature/avrcp-hid-media-control` | 已合 main，可删 |
 | `fix/cyw43-pins-rp2350b` | 板支持已合 main，可删 |
 | `usb-cdc-debug-fixes` | CDC 调试实验，未合入 |
@@ -259,4 +259,4 @@ VS Code Pico 扩展：用 **Switch Board** / 设置 `PICO_BOARD`；Waveshare 需
 
 ---
 
-*文档对应 fork 演进至 2026-07 前后：HID 媒体键、配对/L2CAP/HCI 修复、Waveshare 板支持、LDAC HQ。有行为变更时请同步更新本节。*
+*文档对应 fork 演进至 2026-07 前后：HID 媒体键、配对/L2CAP/HCI 修复、Waveshare 板支持、LDAC SQ。有行为变更时请同步更新本节。*
